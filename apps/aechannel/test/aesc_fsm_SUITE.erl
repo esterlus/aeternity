@@ -50,6 +50,7 @@
         , check_incorrect_mutual_close/1
         , check_mutual_close_with_wrong_amounts/1
         , check_mutual_close_after_close_solo/1
+        , check_fsm_crash_reestablish/1
         , attach_initiator/1
         , attach_responder/1
         , initiator_spend/1
@@ -152,6 +153,7 @@ groups() ->
       [
         check_mutual_close_with_wrong_amounts
       , check_mutual_close_after_close_solo
+      , check_fsm_crash_reestablish
       ]},
      {signatures, [sequence], [check_incorrect_create | update_sequence()]
                                ++ [check_incorrect_mutual_close]},
@@ -1309,6 +1311,41 @@ check_mutual_close_after_close_solo(Cfg) ->
             check_info(500),
             shutdown_(I, R, Cfg)
     end,
+    ok.
+
+check_fsm_crash_reestablish(Cfg) ->
+    Debug = get_debug(Cfg),
+    {I0, R0, Spec0} = channel_spec(Cfg),
+    #{ i := I, r := R } = create_channel_from_spec(I0, R0, Spec0, ?PORT, Debug, Cfg),
+    ct:log("I = ~p", [I]),
+    ct:log("R = ~p", [R]),
+    {_, I1, R1} = do_n(4, fun update_volley/3, I, R, Cfg),
+    fsm_crash_reestablish(I1, R1, Spec0, Cfg, fun fsm_crash_action_during_transfer/3).
+
+fsm_crash_reestablish(#{channel_id := ChId, fsm := FsmI} = I, #{fsm := FsmR} = R, Spec, Cfg, Action) ->
+    Debug = get_debug(Cfg),
+    {ok, State} = rpc(dev1, aesc_fsm, get_offchain_state, [FsmI]),
+    {_, SignedTx} = aesc_offchain_state:get_latest_signed_tx(State),
+    ct:log("Simulating random crash"),
+    ok = Action(I, R, Cfg),
+    erlang:exit(FsmI, test_random_crash),
+    erlang:exit(FsmR, test_random_crash),
+
+    Cache = cache_status(ChId),
+    [] = in_ram(Cache),
+    [_, _] = on_disk(Cache),
+    check_info(500),
+    ct:log("reestablishing ...", []),
+    #{i := I1, r := R1} = reestablish(ChId, I, R, SignedTx, Spec, ?PORT, Debug),
+    {I1, R1}.
+
+fsm_crash_action_during_transfer( #{fsm := FsmI, pub := PubI} = I
+                                , #{pub := PubR} = R
+                                , Cfg) ->
+    Debug = get_debug(Cfg),
+    rpc(dev1, aesc_fsm, upd_transfer, [FsmI, PubI, PubR, 1], Debug),
+    {_, _} = await_signing_request(update, I, Debug, Cfg),
+    {ok, _} = receive_from_fsm(update_ack, R, signing_req(), ?TIMEOUT, Debug),
     ok.
 
 fsm_state(Pid, Debug) ->

@@ -39,7 +39,7 @@
              watchers  = ets:new(watchers, [set]),
              min_depth = ?MIN_DEPTH}).
 -type ch_cache_id() :: { aeser_id:val()
-                     , aeser_id:val()}.
+                       , aeser_id:val()}.
 -record(ch_cache, { cache_id    :: ch_cache_id()
                   , state       :: aesc_offchain_state:state()
                   , salt        :: binary()
@@ -174,7 +174,7 @@ handle_cast({delete, ChId}, St) ->
 handle_cast(_Msg, St) ->
     {noreply, St}.
 
-handle_info({'DOWN', MRef, process, _Pid, _}, St) ->
+handle_info({'DOWN', MRef, process, _Pid, _Reason}, St) ->
     case lookup_by_mref(MRef, St) of
         {ChId, PubKey} = CacheId ->
             move_state_to_persistent(CacheId),
@@ -190,7 +190,8 @@ handle_info({'DOWN', MRef, process, _Pid, _}, St) ->
         error ->
             {noreply, St}
     end;
-handle_info(_Msg, St) ->
+handle_info(Msg, St) ->
+    lager:debug("Got ~p", [Msg]),
     {noreply, St}.
 
 terminate(_Reason, _St) ->
