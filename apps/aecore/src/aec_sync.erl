@@ -336,7 +336,7 @@ handle_last_result(ST = #sync_task{ adding = Add, pending = Pends, pool = Pool, 
     %% Put back the blocks we did not manage to post, and schedule failing block
     %% for another retreival.
     [#pool_item{ height = Height, hash = Hash } | PutBack] =
-        lists:dropwhile(fun(#pool_item{ height = H }) -> H < Height end, Add) ++ lists:append(Pends),
+        lists:dropwhile(fun(#pool_item{ height = H }) -> H < Height end, Add) ++ lists:append(Pends), %% Assumption: remote peer provided height-hash pairs in ascending order.
     NewPool = [#pool_item{ height = Height, hash = Hash, got = false } | PutBack] ++ Pool,
     ST1 = ST#sync_task{ adding = [], pending = [], pool = NewPool },
 
@@ -809,7 +809,7 @@ fill_pool(PeerId, StartHash, TargetHash, ST) ->
             update_sync_task({done, PeerId}, ST),
             epoch_sync:info("Sync done (according to ~p)", [ppp(PeerId)]),
             aec_events:publish(chain_sync, {chain_sync_done, PeerId});
-        {ok, Hashes} ->
+        {ok, Hashes} -> %% TODO Check order of heights.
             HashPool = [ #pool_item{ height = Height, hash = Hash, got = false } || {Height, Hash} <- Hashes ],
             do_work_on_sync_task(PeerId, ST, {hash_pool, HashPool});
         {error, _} = Error ->
@@ -821,6 +821,7 @@ fill_pool(PeerId, StartHash, TargetHash, ST) ->
 do_get_generation(PeerId, LastHash) ->
     case aec_peer_connection:get_generation(PeerId, LastHash, forward) of
         {ok, KeyBlock, MicroBlocks, forward} ->
+            %% No strict need to check correctness of heights.
             Generation = #{ key_block => KeyBlock,
                             micro_blocks => MicroBlocks,
                             dir => forward },
@@ -842,7 +843,7 @@ do_fetch_generation_ext(Hash, PeerId) ->
     epoch_sync:debug("we don't have the block -fetching (~p)", [pp(Hash)]),
     case aec_peer_connection:get_generation(PeerId, Hash, backward) of
         {ok, KeyBlock, MicroBlocks, backward} ->
-            case header_hash(KeyBlock) =:= Hash of
+            case header_hash(KeyBlock) =:= Hash of %% TODO Check that microblocks have same height as key block.
                 true ->
                     epoch_sync:debug("block fetched from ~p (~p); ~p",
                                      [ppp(PeerId), pp(Hash), pp(KeyBlock)]),
